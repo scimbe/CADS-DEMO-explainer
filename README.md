@@ -146,6 +146,18 @@ run the pipeline yourself to reproduce, or ask a maintainer for a sample.
 
 ## Known limitations
 
+- **The TTS stage is currently broken on macOS/arm64.** `pip install piper-tts` pulls a wheel
+  (confirmed on 1.7.0) whose compiled `espeakbridge.so` has an absolute
+  `/Users/runner/work/piper1-gpl/.../espeak-ng-data` path baked in from its CI build machine —
+  it ignores the correct bundled `espeak-ng-data` sitting right next to it, and there's no env
+  var (`ESPEAK_DATA_PATH`/`ESPEAK_NG_DATA_PATH`) or CLI flag that overrides it. Result: every
+  synthesis call fails with `Error processing file '.../phontab': No such file or directory`,
+  even though setup/voice-download succeed cleanly. This was found and fully diagnosed on a
+  real Mac (arm64) — confirmed not fixable from outside the wheel. Verified working on Linux,
+  where the wheel's baked-in path happens to resolve (or a system `espeak-ng` fills the gap).
+  Not yet fixed here — needs either a `piper-tts` version whose wheel resolves espeak-ng-data
+  relatively, or `setup-voice.sh` detecting macOS and wiring a system `espeak-ng`
+  (`brew install espeak-ng`) with the correct data path instead.
 - No diagram/archetype visuals — text-only slide template (see "Credit" above).
 - No word-anchor sync — animation timing is per-scene, not per-word.
 - No QA gates — SlideCreator has a linter (`teleprompter_lint.py`), a Whisper
