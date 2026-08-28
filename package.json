@@ -1,0 +1,18 @@
+{
+  "name": "cads-demo-explainer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marketplace demo: topic -> narrated animated explainer video. LLM writes the storyboard/script, deterministic local tools (Piper TTS, Puppeteer/GSAP render, ffmpeg) do the production.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/",
+    "pipeline": "node src/pipeline.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  },
+  "license": "MIT"
+}
