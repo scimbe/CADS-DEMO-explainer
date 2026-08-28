@@ -158,6 +158,27 @@ run the pipeline yourself to reproduce, or ask a maintainer for a sample.
   through the CLI is a small follow-up, not done here).
 - No caching/output-pinning (SlideCreator hashes topic+settings to skip re-generation on
   identical input); every run here re-calls the LLM and re-synthesizes audio.
+- **`npm audit` reports 3 high-severity transitive vulnerabilities** (`extract-zip`, via
+  `@puppeteer/browsers` → `puppeteer-core`, symlink path traversal in puppeteer's own
+  browser-*download* tooling — GHSA-jmr9-qjv8-65gv). This repo never exercises that code
+  path — `src/render/engine.mjs` always points `executablePath` at a system-installed Chrome
+  (`findChrome()`), it never lets `puppeteer-core` download one — so the vulnerable code
+  never runs here. Fixing it requires a major `puppeteer-core` bump (`npm audit fix --force`)
+  that wasn't applied without re-verifying the whole render pipeline against it; tracked as a
+  real follow-up, not silently ignored.
+- **Rendering has one soft network dependency**: `src/render/slides.mjs` loads DM Sans /
+  JetBrains Mono from `fonts.googleapis.com`/`fonts.gstatic.com` at render time. It falls
+  back cleanly to `Arial`/`sans-serif` and `ui-monospace`/`monospace` if that's unreachable,
+  so it degrades rather than breaks offline — but "renders entirely locally" has this one
+  asterisk, unlike the render *engine* itself (Chrome/ffmpeg), which has none.
+- **Trailing LLM commentary with no code fence can leak into the last scene's narration**
+  (e.g. a closing "Let me know if you'd like changes!" appended after the real script, with
+  no fence to signal "this isn't scene content"). The two fence-handling bugs this repo fixed
+  (stray trailing fence, fenced-block *contents* not skipped) are unaffected — this is a
+  different, narrower case: chatter with no fence marker at all. Guarded today by the system
+  prompt's explicit "no commentary" instruction, not by the parser; a real fix would need the
+  parser to detect trailing non-scene text heuristically. Not observed to affect validation or
+  rendering (chatter just becomes extra narration text), but worth closing properly later.
 
 ## License
 
