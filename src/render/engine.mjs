@@ -19,6 +19,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { mapLimit, resolveConcurrency } from "../util/concurrency.mjs";
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -88,10 +89,10 @@ async function renderScene(browser, scene, compositionsDir, outputDir, fps) {
 }
 
 /**
- * @param {{projectDir:string, fps?:number, chromePath?:string}} opts
+ * @param {{projectDir:string, fps?:number, chromePath?:string, concurrency?:number}} opts
  * @returns {Promise<Array<{scene:string, file:string}>>}
  */
-export async function renderScenes({ projectDir, fps = 30, chromePath }) {
+export async function renderScenes({ projectDir, fps = 30, chromePath, concurrency }) {
   const puppeteer = (await import("puppeteer-core")).default;
   const compositionsDir = path.join(projectDir, "compositions");
   const outputDir = path.join(projectDir, "renders");
@@ -119,15 +120,18 @@ export async function renderScenes({ projectDir, fps = 30, chromePath }) {
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--allow-file-access-from-files"],
   });
 
-  const results = [];
+  // Scenes are independent; render up to `limit` at once (each on its own page + ffmpeg).
+  // Order is preserved by mapLimit, and the final concat order comes from the manifest in
+  // finalizeVideo anyway, so concurrency never reorders the output.
+  const limit = resolveConcurrency(concurrency, "RENDER_CONCURRENCY");
+  console.error(`  rendering ${scenes.length} scenes (concurrency=${limit})`);
   try {
-    for (const scene of scenes) {
+    return await mapLimit(scenes, limit, async (scene) => {
       console.error(`  render ${scene.id} (${scene.duration.toFixed(1)}s, ${Math.round(scene.duration * fps)} frames)`);
       const file = await renderScene(browser, scene, compositionsDir, outputDir, fps);
-      results.push({ scene: scene.id, file });
-    }
+      return { scene: scene.id, file };
+    });
   } finally {
     await browser.close();
   }
-  return results;
 }

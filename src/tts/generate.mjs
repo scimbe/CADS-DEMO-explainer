@@ -8,11 +8,15 @@
  *
  * Setup: scripts/setup-voice.sh (creates .venv, installs piper-tts, downloads the voice).
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { stripPronunciation } from "../text/sanitize.mjs";
+import { mapLimit, resolveConcurrency } from "../util/concurrency.mjs";
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -20,8 +24,13 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const DEFAULT_PIPER_BIN = path.join(REPO_ROOT, ".venv", "bin", "piper");
 const DEFAULT_VOICE_MODEL = path.join(REPO_ROOT, "voices", "en_US-lessac-medium.onnx");
 
-/** Synthesize one line of narration to a WAV file. Throws with a setup hint if piper/voice are missing. */
-export function synthesizeOne(text, outWavPath, opts = {}) {
+/**
+ * Synthesize one line of narration to a WAV file. Async (spawn, not spawnSync) so callers
+ * can run several scenes concurrently — a synchronous child_process would block the event
+ * loop and serialize them regardless of any concurrency limit. Throws with a setup hint if
+ * piper/voice are missing.
+ */
+export async function synthesizeOne(text, outWavPath, opts = {}) {
   const piperBin = opts.piperBin || process.env.PIPER_BIN || DEFAULT_PIPER_BIN;
   const model = opts.model || process.env.PIPER_VOICE_MODEL || DEFAULT_VOICE_MODEL;
   if (!fs.existsSync(piperBin)) {
@@ -32,51 +41,66 @@ export function synthesizeOne(text, outWavPath, opts = {}) {
   }
   if (!text || !text.trim()) throw new Error(`synthesizeOne: empty narration text for ${outWavPath}`);
   fs.mkdirSync(path.dirname(outWavPath), { recursive: true });
-  const res = spawnSync(piperBin, ["-m", model, "-f", outWavPath], { input: text, encoding: "utf8" });
-  if (res.error) throw new Error(`piper could not be started: ${res.error.message}`);
-  if (res.status !== 0) throw new Error(`piper failed (exit ${res.status}): ${(res.stderr || "").slice(-2000)}`);
+
+  await new Promise((resolve, reject) => {
+    const proc = spawn(piperBin, ["-m", model, "-f", outWavPath], { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    proc.on("error", (e) => reject(new Error(`piper could not be started: ${e.message}`)));
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`piper failed (exit ${code}): ${stderr.slice(-2000)}`));
+      resolve();
+    });
+    proc.stdin.on("error", () => {}); // ignore EPIPE if piper exits before we finish writing
+    proc.stdin.end(text);
+  });
+
   if (!fs.existsSync(outWavPath) || fs.statSync(outWavPath).size === 0) {
     throw new Error(`piper produced no audio: ${outWavPath}`);
   }
   return outWavPath;
 }
 
-function ffprobeDuration(file) {
-  const out = execFileSync("ffprobe", [
+async function ffprobeDuration(file) {
+  const { stdout } = await execFileAsync("ffprobe", [
     "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", file,
   ]);
-  const dur = parseFloat(out.toString().trim());
-  if (!Number.isFinite(dur) || dur <= 0) throw new Error(`ffprobe returned an invalid duration for ${file}: ${out}`);
+  const dur = parseFloat(stdout.toString().trim());
+  if (!Number.isFinite(dur) || dur <= 0) throw new Error(`ffprobe returned an invalid duration for ${file}: ${stdout}`);
   return dur;
 }
 
 /**
- * @param {{scenes:Array<{num:number,title:string,narration:string}>, outDir:string, piperBin?:string, model?:string}} opts
+ * @param {{scenes:Array<{num:number,title:string,narration:string}>, outDir:string,
+ *          piperBin?:string, model?:string, concurrency?:number}} opts
  * @returns {Promise<{scenes:Array<{scene:number,title:string,narration:string,audio:string,duration:number}>}>}
  */
-export async function synthesizeScenes({ scenes, outDir, piperBin, model }) {
+export async function synthesizeScenes({ scenes, outDir, piperBin, model, concurrency }) {
   if (!Array.isArray(scenes) || scenes.length === 0) throw new Error("synthesizeScenes: no scenes given.");
   const assetsDir = path.join(outDir, "assets");
   fs.mkdirSync(assetsDir, { recursive: true });
 
-  const manifestScenes = [];
-  for (const s of scenes) {
+  // Scenes are independent; synthesize up to `limit` at once. mapLimit preserves order,
+  // so the manifest scene array stays 1..N regardless of which finished first.
+  const limit = resolveConcurrency(concurrency, "TTS_CONCURRENCY");
+  const manifestScenes = await mapLimit(scenes, limit, async (s) => {
     const sid = String(s.num).padStart(2, "0");
     const wavPath = path.join(assetsDir, `scene-${sid}.wav`);
     // Final safety net right before synthesis: strip any IPA pronunciation gloss so
     // Piper never voices a phonetic string. Pure text cleanup, facts untouched; the
     // manifest stores the same sanitized text the audio was made from.
     const narration = stripPronunciation(s.narration);
-    synthesizeOne(narration, wavPath, { piperBin, model });
-    const duration = ffprobeDuration(wavPath);
-    manifestScenes.push({
+    await synthesizeOne(narration, wavPath, { piperBin, model });
+    const duration = await ffprobeDuration(wavPath);
+    return {
       scene: s.num,
       title: s.title,
       narration,
       audio: path.relative(outDir, wavPath),
       duration,
-    });
-  }
+    };
+  });
+
   const manifest = { voice: "piper/en_US-lessac-medium (generic stock voice)", scenes: manifestScenes };
   fs.writeFileSync(path.join(assetsDir, "scenes.json"), JSON.stringify(manifest, null, 2));
   return manifest;
