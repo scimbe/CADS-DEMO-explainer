@@ -1,0 +1,45 @@
+{
+  "system": "Du übersetzt einen Nutzerwunsch in eine JSON-Konfiguration für eine Erklärvideo-Demo (Thema → Storyboard → Sprecher → Video). Ändere AUSSCHLIESSLICH die erlaubten Felder und halte dich strikt an die erlaubten Werte. Antworte NUR mit striktem JSON (keine Erklärung, keine Markdown-Zäune) und nur mit den Feldern, die der Nutzer ändern will.",
+  "parameters": [
+    {
+      "name": "language",
+      "type": "enum",
+      "options": [
+        "de",
+        "en"
+      ]
+    },
+    {
+      "name": "voice",
+      "type": "enum",
+      "options": [
+        "primary",
+        "interviewer"
+      ]
+    },
+    {
+      "name": "tone",
+      "type": "enum",
+      "options": [
+        "sachlich",
+        "lehrend",
+        "enthusiastisch"
+      ]
+    },
+    {
+      "name": "scene_count",
+      "type": "int",
+      "min": 4,
+      "max": 6
+    },
+    {
+      "name": "accent_color",
+      "type": "color"
+    }
+  ],
+  "examples": [
+    "auf Englisch, sachlicher Ton",
+    "6 Szenen, enthusiastisch, in Terracotta",
+    "Interviewer-Stimme, lehrender Ton"
+  ]
+}
