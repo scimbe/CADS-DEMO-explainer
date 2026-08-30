@@ -14,6 +14,7 @@
  * deterministic code — the LLM's only job is this markdown.
  */
 import { createLLM } from "../llm/client.mjs";
+import { stripPronunciation } from "../text/sanitize.mjs";
 
 const SCENE_RE = /^##\s+Scene\s+(\d+)\s*[—-]\s*(.+?)\s*$/i;
 
@@ -257,6 +258,17 @@ export async function generateStoryboardFromSource({ source, llm, model } = {}) 
     revision: source.revision || "",
   };
 
+  // Strip IPA pronunciation glosses up front, so every downstream consumer -- the
+  // LLM prompt, the number-guard, and the verbatim fallback -- sees the same clean
+  // text. Sanitizing the guard's source side here keeps it symmetric with the
+  // sanitized narration below, so the number comparison never breaks over an IPA edit.
+  const cleanExtract = stripPronunciation(source.extract);
+  const cleanSource = {
+    ...source,
+    extract: cleanExtract,
+    description: stripPronunciation(source.description || ""),
+  };
+
   let llmScenes = null;
   let usedModel = model || "verbatim-fallback";
   let guard = { ok: false, missing: [], reason: "not-run" };
@@ -266,16 +278,17 @@ export async function generateStoryboardFromSource({ source, llm, model } = {}) 
     const result = await client.chat({
       messages: [
         { role: "system", content: SOURCE_SYSTEM_PROMPT },
-        { role: "user", content: `TITLE: ${source.title}\n\nSOURCE:\n${source.extract}` },
+        { role: "user", content: `TITLE: ${cleanSource.title}\n\nSOURCE:\n${cleanExtract}` },
       ],
       model,
       temperature: 0.2,
       maxTokens: 1500,
     });
     usedModel = result.model;
-    const parsed = validateScenes(parseTeleprompter(cleanScript(result.text)));
+    const parsed = validateScenes(parseTeleprompter(cleanScript(result.text)))
+      .map((s) => ({ ...s, narration: stripPronunciation(s.narration) }));
     const narration = parsed.map((s) => s.narration).join(" ");
-    const g = checkNumberGuard(source.extract, narration);
+    const g = checkNumberGuard(cleanExtract, narration);
     guard = { ok: g.ok, missing: g.missing, reason: g.ok ? "passed" : "numbers-missing" };
     if (g.ok) llmScenes = parsed;
   } catch (e) {
@@ -283,7 +296,7 @@ export async function generateStoryboardFromSource({ source, llm, model } = {}) 
   }
 
   const grounding = llmScenes ? "llm" : "verbatim-fallback";
-  const scenes = llmScenes ?? buildVerbatimStoryboard(source);
+  const scenes = llmScenes ?? buildVerbatimStoryboard(cleanSource);
   const provenance = { ...provenanceBase, grounding, model: usedModel };
   const markdown = scenesToMarkdown(scenes, provenance);
   return { markdown, scenes, model: usedModel, grounding, provenance, guard };
