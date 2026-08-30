@@ -104,6 +104,46 @@ node src/tts/generate.mjs teleprompter.md <outDir>         # -> outDir/assets/{s
 # (see src/pipeline.mjs for how they're wired together)
 ```
 
+### Grounded in a Wikipedia article
+
+Instead of letting the LLM free-associate about a topic, you can pin the storyboard to a
+real German-Wikipedia article. The article's verbatim lead paragraph (the REST `extract`)
+becomes the **only** facts the script may use:
+
+```bash
+node src/pipeline.mjs --wikipedia "Transmission Control Protocol"
+# -> projects/wiki-<slug>-<timestamp>/renders/final.mp4
+```
+
+How it stays honest:
+
+- **Fetch** — `src/source/wikipedia.mjs` calls
+  `GET https://de.wikipedia.org/api/rest_v1/page/summary/<Titel>`
+  (`accept: application/json`, `user-agent: CADS-Demo-Explainer/1.0`). The endpoint resolves
+  redirects itself (e.g. `Fog_Computing` → *Edge Computing*). Disambiguation pages, 404s, and
+  empty extracts are rejected with a clear reason instead of being fed downstream.
+- **Ground** — `generateStoryboardFromSource` prompts the LLM to write the storyboard using
+  *only* the extract, copying every number and name verbatim, in the source's language.
+- **Number-guard** — every number in the source extract must appear verbatim in the generated
+  narration. If the LLM drops or reformats one (`1.000` → `1000` counts as dropped), its
+  rewrite is discarded and the storyboard is rebuilt **verbatim from the source sentences**
+  (`grounding: "verbatim-fallback"`), so a factual figure is never silently altered.
+- **Provenance** — the article title, URL, revision, and grounding mode are written into the
+  teleprompter's header comment and to `projectDir/provenance.json`.
+
+The script-only stage is runnable without the TTS/render toolchain:
+
+```bash
+# fetch + storyboard only (no audio/video), to inspect grounding + provenance
+node -e 'import("./src/source/wikipedia.mjs").then(async ({fetchWikipediaSummary})=>{const s=await fetchWikipediaSummary(process.argv[1]);const {generateStoryboardFromSource}=await import("./src/script/generate.mjs");console.log((await generateStoryboardFromSource({source:s})).markdown)})' "Edge Computing"
+```
+
+Note: the narration is in the article's language (German for `de.wikipedia.org`), while the
+bundled Piper voice is English — for correct pronunciation of a German article, use a German
+Piper voice (see "Known limitations"). The fetch + storyboard stages have been verified
+against the live Wikipedia REST API and the live LLM; the downstream video build shares the
+same (macOS-blocked) TTS stage as the topic pipeline above.
+
 ## Tests
 
 ```bash
