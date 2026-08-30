@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripPronunciation } from "../text/sanitize.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -62,12 +63,16 @@ export async function synthesizeScenes({ scenes, outDir, piperBin, model }) {
   for (const s of scenes) {
     const sid = String(s.num).padStart(2, "0");
     const wavPath = path.join(assetsDir, `scene-${sid}.wav`);
-    synthesizeOne(s.narration, wavPath, { piperBin, model });
+    // Final safety net right before synthesis: strip any IPA pronunciation gloss so
+    // Piper never voices a phonetic string. Pure text cleanup, facts untouched; the
+    // manifest stores the same sanitized text the audio was made from.
+    const narration = stripPronunciation(s.narration);
+    synthesizeOne(narration, wavPath, { piperBin, model });
     const duration = ffprobeDuration(wavPath);
     manifestScenes.push({
       scene: s.num,
       title: s.title,
-      narration: s.narration,
+      narration,
       audio: path.relative(outDir, wavPath),
       duration,
     });

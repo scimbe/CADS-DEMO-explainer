@@ -122,6 +122,10 @@ How it stays honest:
   (`accept: application/json`, `user-agent: CADS-Demo-Explainer/1.0`). The endpoint resolves
   redirects itself (e.g. `Fog_Computing` → *Edge Computing*). Disambiguation pages, 404s, and
   empty extracts are rejected with a clear reason instead of being fed downstream.
+- **Pronunciation strip** — `src/text/sanitize.mjs` removes IPA pronunciation glosses that
+  Wikipedia leads carry after the headword (`Hannover [haˈnoːfɐ] …`, `Kiel (IPA: [kiːl]) …`),
+  so Piper never voices phonetic gibberish. Pure regex, no LLM: ordinary parentheticals and
+  numbers (`(Hansestadt)`, `(2023)`) are left untouched, and it runs again just before TTS.
 - **Ground** — `generateStoryboardFromSource` prompts the LLM to write the storyboard using
   *only* the extract, copying every number and name verbatim, in the source's language.
 - **Number-guard** — every number in the source extract must appear verbatim in the generated
