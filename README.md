@@ -104,6 +104,21 @@ node src/tts/generate.mjs teleprompter.md <outDir>         # -> outDir/assets/{s
 # (see src/pipeline.mjs for how they're wired together)
 ```
 
+### Concurrency
+
+Scenes are independent, so the two per-scene stages run with **bounded concurrency**
+(default 3, hard max 4 — both stages are CPU-bound, so unbounded would only thrash):
+
+- **Rendering** (headless Chrome, the most expensive stage) — `RENDER_CONCURRENCY`
+- **TTS** (Piper synthesis) — `TTS_CONCURRENCY`
+
+```bash
+RENDER_CONCURRENCY=4 TTS_CONCURRENCY=2 node src/pipeline.mjs "<topic>"
+```
+
+Output order is unaffected: the final concat order is taken from the scene manifest in
+`src/mux/finalize.mjs`, not from whichever scene finished rendering first.
+
 ### Grounded in a Wikipedia article
 
 Instead of letting the LLM free-associate about a topic, you can pin the storyboard to a
