@@ -15,8 +15,16 @@
  */
 import { createLLM } from "../llm/client.mjs";
 import { stripPronunciation } from "../text/sanitize.mjs";
+import { ALLOWED_TEMPLATES as ANIMATION_TEMPLATES } from "../render/templates.mjs";
 
 const SCENE_RE = /^##\s+Scene\s+(\d+)\s*[—-]\s*(.+?)\s*$/i;
+const LAYOUT_RE = /^Layout:\s*(photo|animated)\s*$/i;
+const TEMPLATE_RE = /^Template:\s*([a-z0-9-]+)\s*$/i;
+
+/** "text-reveal" is the non-template default and intentionally absent from
+ *  render/templates.mjs's own registry keys — everything else comes from there so the
+ *  two lists can't drift. */
+export const ALLOWED_TEMPLATES = ["text-reveal", ...ANIMATION_TEMPLATES];
 
 const SYSTEM_PROMPT = `You write short narrated-video storyboards for a technical explainer-video demo.
 
@@ -28,6 +36,15 @@ Format (repeat per scene):
 One to three short sentences of narration (plain prose, no markdown, no bullet points,
 no abbreviations that a text-to-speech engine would mispronounce). Each sentence should
 be easy to read aloud. Keep each scene's narration under 50 words.
+
+For most scenes, leave Layout and Template unset — they default to a plain narrated
+slide. Add an optional "Layout: photo" line right after the header only for a scene
+that works as a striking standalone photograph needing little explanation (a
+landscape, an object, a mood shot) — no Template line in that case. For a scene about
+a relationship, comparison, sequence, or process where a small structured animation
+would help, add an optional "Template: <name>" line right after the header (Layout
+must stay animated or unset), choosing exactly one of: ${ANIMATION_TEMPLATES.join(", ")}.
+Do not invent new values for either field.
 
 Rules:
 - Exactly one blank line between the header and the narration, and between scenes.
@@ -52,7 +69,17 @@ export function cleanScript(text) {
   return `${s}\n`;
 }
 
-/** Markdown -> [{num, title, narration}]. Pure, deterministic, no I/O. */
+/**
+ * Markdown -> [{num, title, narration, layout, template, templateParams}]. Pure,
+ * deterministic, no I/O.
+ *
+ * `layout` defaults to "animated" when no `Layout:` line is present. `template` is the
+ * RAW parsed value (the literal name from a `Template:` line, or `null` if absent) —
+ * intentionally NOT yet defaulted to "text-reveal" here, so `validateScenes` can still
+ * see and reject an illegal `Layout: photo` + `Template:` combination before applying
+ * defaults. `templateParams` is always `null` at this stage; a later LLM review pass
+ * may fill it in for non-default templates.
+ */
 export function parseTeleprompter(mdContent) {
   const lines = mdContent.split(/\r?\n/);
   const scenes = [];
@@ -69,6 +96,18 @@ export function parseTeleprompter(mdContent) {
       continue;
     }
     if (!cur || !line) continue;
+    // Layout:/Template: are only recognized before any narration line has been
+    // captured for this scene — once narration starts, they're just prose.
+    if (cur.bodyLines.length === 0) {
+      if (cur.layout === undefined) {
+        const lm = line.match(LAYOUT_RE);
+        if (lm) { cur.layout = lm[1].toLowerCase(); continue; }
+      }
+      if (cur.template === undefined) {
+        const tm = line.match(TEMPLATE_RE);
+        if (tm) { cur.template = tm[1].toLowerCase(); continue; }
+      }
+    }
     if (/^(#|>|\||---)/.test(line)) continue;
     cur.bodyLines.push(line);
   }
@@ -76,10 +115,18 @@ export function parseTeleprompter(mdContent) {
     num: s.num,
     title: s.title,
     narration: s.bodyLines.join(" ").replace(/\s+/g, " ").trim(),
+    layout: s.layout ?? "animated",
+    template: s.template ?? null,
+    templateParams: null,
   }));
 }
 
-/** Validate a parsed storyboard is usable downstream. Throws with a specific reason. */
+/**
+ * Validate a parsed storyboard is usable downstream, and fill in the final
+ * Layout/Template defaults. Throws with a specific reason. Returns a NEW array (the
+ * input is treated as raw/partially-defaulted — see `parseTeleprompter` above — the
+ * output is the fully-resolved shape every downstream stage can rely on).
+ */
 export function validateScenes(scenes) {
   if (scenes.length < 2) throw new Error(`Storyboard has ${scenes.length} scene(s), need at least 2.`);
   for (const s of scenes) {
@@ -91,7 +138,22 @@ export function validateScenes(scenes) {
   if (JSON.stringify(nums) !== JSON.stringify(expected)) {
     throw new Error(`Scene numbers are not sequential starting at 1: got [${nums.join(",")}]`);
   }
-  return scenes;
+  return scenes.map((s) => {
+    const layout = s.layout ?? "animated";
+    if (!["photo", "animated"].includes(layout)) {
+      throw new Error(`Scene ${s.num} ("${s.title}") has an invalid Layout: "${layout}" (expected photo or animated).`);
+    }
+    if (layout === "photo" && s.template) {
+      throw new Error(`Scene ${s.num} ("${s.title}"): Template is only valid when Layout is animated.`);
+    }
+    const template = layout === "photo" ? null : (s.template ?? "text-reveal");
+    if (layout === "animated" && !ALLOWED_TEMPLATES.includes(template)) {
+      throw new Error(
+        `Scene ${s.num} ("${s.title}") has an invalid Template: "${template}" (expected one of ${ALLOWED_TEMPLATES.join(", ")}).`,
+      );
+    }
+    return { num: s.num, title: s.title, narration: s.narration, layout, template, templateParams: s.templateParams ?? null };
+  });
 }
 
 /**
